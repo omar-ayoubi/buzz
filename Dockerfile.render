@@ -1,0 +1,14 @@
+# Thin Render wrapper around the public Buzz image.
+# Adds an entrypoint that wires RENDER_EXTERNAL_HOSTNAME → RELAY_URL / media URLs
+# and listens on Render's $PORT.
+#
+# Build context: repo root
+#   docker build -f Dockerfile.render -t buzz-render .
+FROM ghcr.io/block/buzz:main
+
+USER root
+COPY scripts/render-entrypoint.sh /usr/local/bin/render-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/render-entrypoint.sh
+USER buzz:buzz
+
+ENTRYPOINT ["/usr/local/bin/render-entrypoint.sh"]

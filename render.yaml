@@ -1,0 +1,139 @@
+# Buzz on Render — Postgres + Redis + MinIO + relay (web UI included in image)
+#
+# Deploy:
+#   1. Push this repo to GitHub/GitLab (your fork or private copy).
+#   2. Dashboard → New → Blueprint → select the repo.
+#   3. Fill prompted secrets (see envVars with sync: false).
+#   4. After deploy, open https://<service>.onrender.com and connect a Buzz client
+#      to wss://<service>.onrender.com
+#
+# Notes:
+#   - Starter plan is required (disks + private services are not free-tier).
+#   - BUZZ_RELAY_PRIVATE_KEY must be a stable 64-char hex secret (do not rotate lightly).
+#   - Membership is open by default for first boot; lock down with RELAY_OWNER_PUBKEY later.
+#   - Pin BUZZ image tag in Dockerfile.render for production (replace :main).
+#
+# Docs: https://github.com/block/buzz  ·  https://render.com/docs/blueprint-spec
+
+previews:
+  generation: off
+
+services:
+  # ── Public Buzz relay (WS + REST + bundled web UI) ─────────────────────────
+  - type: web
+    name: buzz
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile.render
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    numInstances: 1
+    maxShutdownDelaySeconds: 60
+    disk:
+      name: buzz-git-data
+      mountPath: /data/git
+      sizeGB: 5
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: BUZZ_BIND_ADDR
+        value: "0.0.0.0:10000"
+      - key: BUZZ_HEALTH_PORT
+        value: "8080"
+      - key: BUZZ_METRICS_PORT
+        value: "9102"
+      - key: BUZZ_GIT_REPO_PATH
+        value: /data/git
+      - key: BUZZ_AUTO_MIGRATE
+        value: "true"
+      - key: BUZZ_GIT_CONFORMANCE_PROBE
+        value: "true"
+      # Open join for first deploy. Set true + RELAY_OWNER_PUBKEY to close the relay.
+      - key: BUZZ_REQUIRE_AUTH_TOKEN
+        value: "true"
+      - key: BUZZ_REQUIRE_RELAY_MEMBERSHIP
+        value: "false"
+      - key: BUZZ_ALLOW_NIP_OA_AUTH
+        value: "true"
+      - key: BUZZ_S3_BUCKET
+        value: buzz-media
+      - key: BUZZ_S3_REGION
+        value: us-east-1
+      - key: RUST_LOG
+        value: buzz_relay=info,buzz_db=info,buzz_auth=info,buzz_pubsub=info,tower_http=info
+      # Stable 64-char hex private key — generate once: openssl rand -hex 32
+      # Dashboard will prompt for this on first Blueprint create.
+      - key: BUZZ_RELAY_PRIVATE_KEY
+        sync: false
+      - key: BUZZ_GIT_HOOK_HMAC_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: buzz-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: buzz-redis
+          type: keyvalue
+          property: connectionString
+      # Composed to http://$MINIO_HOSTPORT by scripts/render-entrypoint.sh
+      - key: MINIO_HOSTPORT
+        fromService:
+          name: buzz-minio
+          type: pserv
+          property: hostport
+      - key: BUZZ_S3_ACCESS_KEY
+        fromService:
+          name: buzz-minio
+          type: pserv
+          envVarKey: MINIO_ROOT_USER
+      - key: BUZZ_S3_SECRET_KEY
+        fromService:
+          name: buzz-minio
+          type: pserv
+          envVarKey: MINIO_ROOT_PASSWORD
+
+  # ── S3-compatible media store (private network only) ───────────────────────
+  - type: pserv
+    name: buzz-minio
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile.minio
+    dockerContext: .
+    autoDeployTrigger: commit
+    numInstances: 1
+    disk:
+      name: buzz-minio-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: MINIO_DATA_DIR
+        value: /data
+      - key: BUZZ_S3_BUCKET
+        value: buzz-media
+      - key: MINIO_ROOT_USER
+        generateValue: true
+      - key: MINIO_ROOT_PASSWORD
+        generateValue: true
+
+  # ── Redis (pub/sub, presence, rate limits) ─────────────────────────────────
+  - type: keyvalue
+    name: buzz-redis
+    plan: starter
+    region: oregon
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: [] # private network only
+
+databases:
+  - name: buzz-db
+    plan: basic-256mb
+    region: oregon
+    postgresMajorVersion: "17"
+    databaseName: buzz
+    user: buzz
+    ipAllowList: [] # private network only

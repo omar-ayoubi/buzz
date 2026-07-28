@@ -1,0 +1,27 @@
+# MinIO + mc for Render private service deploys.
+# Debian base so the start script has a real shell; creates the media bucket
+# on boot, then keeps MinIO in the foreground.
+FROM minio/minio:RELEASE.2025-09-07T16-13-09Z AS minio
+FROM minio/mc:RELEASE.2025-08-13T08-35-41Z AS mc
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 1000 minio \
+    && useradd --system --uid 1000 --gid 1000 --home-dir /data --create-home \
+               --shell /usr/sbin/nologin minio
+
+COPY --from=minio /usr/bin/minio /usr/bin/minio
+COPY --from=mc /usr/bin/mc /usr/bin/mc
+COPY scripts/minio-render-start.sh /usr/bin/minio-render-start.sh
+
+RUN chmod 0755 /usr/bin/minio /usr/bin/mc /usr/bin/minio-render-start.sh \
+    && mkdir -p /data \
+    && chown -R minio:minio /data
+
+USER minio:minio
+WORKDIR /data
+
+ENTRYPOINT ["/usr/bin/minio-render-start.sh"]
