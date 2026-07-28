@@ -30,7 +30,7 @@ services:
     healthCheckPath: /health
     autoDeployTrigger: commit
     numInstances: 1
-    maxShutdownDelaySeconds: 60
+    # maxShutdownDelaySeconds is not allowed on services with a disk
     disk:
       name: buzz-git-data
       mountPath: /data/git
