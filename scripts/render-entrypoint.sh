@@ -21,4 +21,20 @@ fi
 
 mkdir -p "${BUZZ_GIT_REPO_PATH:-/data/git}"
 
-exec /usr/local/bin/buzz-relay
+# Render can bounce Postgres while this container is already starting:
+# service resume wakes the DB after the web dyno, and a Blueprint sync can
+# issue a fast shutdown mid-deploy. buzz-relay treats the first failed
+# handshake as fatal (`expected to read 5 bytes, got 0 bytes at EOF`), so
+# retry here and keep PID 1 alive until Postgres accepts connections.
+max_attempts="${BUZZ_START_RETRIES:-15}"
+attempt=1
+while :; do
+  /usr/local/bin/buzz-relay && exit 0
+  if [ "$attempt" -ge "$max_attempts" ]; then
+    echo "buzz-relay failed after ${max_attempts} attempts" >&2
+    exit 1
+  fi
+  echo "buzz-relay exited; retry ${attempt}/${max_attempts} in 4s (waiting for Postgres)" >&2
+  attempt=$((attempt + 1))
+  sleep 4
+done
